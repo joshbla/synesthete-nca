@@ -16,7 +16,7 @@ architecture is expected to accomplish, and how success will be falsified.
 
 ## Status
 
-**Research and design only. No model has been implemented in this repository.**
+**Project environment established. No model has been implemented yet.**
 
 The current work establishes:
 
@@ -27,8 +27,26 @@ The current work establishes:
 - a staged experiment plan with explicit counterfactual evaluations;
 - the research evidence behind the decision and the evidence still missing.
 
-No Python environment, dependencies, training pipeline, or cloud resources have
-been created yet.
+The repository now includes a minimal Python, PyTorch, test, and lint setup for
+the Stage 0 runtime benchmarks. It does not yet include an NCA, audio feature
+extractor, training pipeline, experiment configuration, or cloud resources.
+
+## Setup
+
+The project uses Python 3.13 and `uv`:
+
+```bash
+uv sync
+uv run synesthete-check --require-mps
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+```
+
+The runtime check reports the Python and PyTorch versions, fails when the local
+MPS backend is unavailable, and executes a small synchronized matrix operation
+on the GPU. This is an environment check only; the Stage 0 model benchmark
+described in the experiment plan has not been implemented.
 
 ## The Core Bet
 
