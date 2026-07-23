@@ -17,6 +17,7 @@ hidden state channels        15
 perception                    identity, Sobel X, Sobel Y, Laplacian
 update hidden width          96
 update type                  stochastic asynchronous residual update
+update step size             0.1
 NCA updates per video frame  4-8
 output frame rate            15 initially; compare 24 later
 audio features               no more than 10 per aligned time window
@@ -118,9 +119,10 @@ An audio/genome modulation network should bring the complete baseline to only
 about 20,000-30,000 trainable parameters, depending on final feature and genome
 dimensions. Exact count must be recorded by the implementation.
 
-The final update projection should begin at or near zero. This makes the initial
-automaton close to an identity recurrence instead of an immediately explosive
-random dynamical system. Training can then grow useful updates gradually.
+The Stage 0 implementation initializes the final update projection and bias to
+exactly zero. This makes the initial automaton an identity recurrence instead of
+an immediately explosive random dynamical system. Training can then grow useful
+updates gradually.
 
 ## Audio Representation
 

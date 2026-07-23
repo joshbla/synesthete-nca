@@ -61,6 +61,28 @@ Can the exact proposed graph train and roll out on MPS within the local budget,
 and can a run be repeated bit-for-bit or within a documented deterministic
 tolerance?
 
+### Result
+
+The runtime and reproducibility gate passed on the target MPS machine. The exact
+`96 x 96 x 16`, 7,792-parameter graph completed finite forward/backward steps at
+rollout lengths 1, 4, 8, 16, and 32 with MPS fallback disabled. A 10,000-update
+no-gradient rollout of the zero-initialized output projection stayed finite and
+kept live MPS allocation constant. A separate nonzero 64-step diagnostic
+trajectory replayed bit-for-bit from the same state and mask seeds, including
+after a strict checkpoint round trip.
+
+State-trajectory hashes replace the originally proposed repeat-render hashes in
+this stage because the current milestone explicitly excludes a rendering stack.
+This is stronger evidence for recurrent numerical replay but does not prove the
+future render mapping or video assembly. Batch and grid scaling also remain
+separate follow-up measurements rather than being mixed into the rollout-length
+baseline.
+
+These results establish engineering feasibility only. The identity-initialized
+long rollout cannot establish stability after learning, persistent motion,
+visual quality, or audio causality. Detailed measurements are recorded in
+`local-compute-envelope.md`.
+
 ### Minimal configuration
 
 - `96 x 96` grid;

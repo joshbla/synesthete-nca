@@ -16,7 +16,7 @@ architecture is expected to accomplish, and how success will be falsified.
 
 ## Status
 
-**Project environment established. No model has been implemented yet.**
+**Stage 0 runtime and reproducibility gate passed on the target MPS machine.**
 
 The current work establishes:
 
@@ -27,9 +27,10 @@ The current work establishes:
 - a staged experiment plan with explicit counterfactual evaluations;
 - the research evidence behind the decision and the evidence still missing.
 
-The repository now includes a minimal Python, PyTorch, test, and lint setup for
-the Stage 0 runtime benchmarks. It does not yet include an NCA, audio feature
-extractor, training pipeline, experiment configuration, or cloud resources.
+The repository now includes the exact unconditioned NCA core, strict checkpoint
+loading, deterministic stochastic-mask replay, and an MPS-only Stage 0
+benchmark. It does not yet include learned dynamics, an audio feature extractor,
+a rendering stack, a training pipeline, or cloud resources.
 
 ## Setup
 
@@ -41,12 +42,14 @@ uv run synesthete-check --require-mps
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
+uv run synesthete-benchmark smoke --output-dir outputs/stage0-smoke
 ```
 
 The runtime check reports the Python and PyTorch versions, fails when the local
 MPS backend is unavailable, and executes a small synchronized matrix operation
-on the GPU. This is an environment check only; the Stage 0 model benchmark
-described in the experiment plan has not been implemented.
+on the GPU. The benchmark executes the real recurrent graph and refuses to run
+when MPS fallback is enabled. Use the `full` budget instead of `smoke` for the
+10,000-update stability trace and measured training rollout table.
 
 ## The Core Bet
 

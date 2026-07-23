@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 synesthete-check = "synesthete.runtime:main"
+synesthete-benchmark = "synesthete.benchmark:main"
 
 [dependency-groups]
 dev = [

@@ -11,7 +11,7 @@ CPU:            10 cores (4 performance, 6 efficiency)
 GPU:            10 integrated cores
 Memory:         16 GB unified
 Graphics API:   Metal 4
-ML backend:     expected PyTorch MPS, to be confirmed during setup
+ML backend:     PyTorch 2.11 MPS, confirmed with the actual NCA graph
 ```
 
 Unified memory is shared by macOS, applications, CPU tensors, GPU tensors,
@@ -314,6 +314,58 @@ After a real 10-minute run, update this document with:
 - render speed at the selected updates per frame.
 
 Until then, every runtime number for the NCA remains provisional.
+
+## Measured Stage 0 Baseline
+
+The full Stage 0 benchmark used batch 1, a `96 x 96 x 16` fp32 state, 96 hidden
+update channels, circular perception, a 0.5 fire rate, a 0.1 update step, and a
+simple terminal mean-square loss with AdamW. MPS fallback was disabled. These
+measurements describe the NCA graph only; future data preparation, teacher
+generation, richer losses, evaluation, checkpoint I/O, and rendering are not
+included in the throughput projections.
+
+The first cold NCA update observed during the smoke process took 0.391 seconds,
+and the first cold forward/backward optimizer step took 0.817 seconds. After the
+Metal operations had been exercised, steady inference took 0.000609 seconds per
+update, or about 1,643 synchronized updates per second. This implies roughly
+205-411 core-only frames per second at eight to four updates per rendered frame,
+well above the proposed 15 fps rate before rendering and frame synchronization
+are added.
+
+The 10,000-update no-gradient trace completed in 3.20 seconds when synchronized
+every 1,000 updates, or about 3,122 updates per second. Live MPS allocation was
+623,616 bytes at both the start and end. Driver allocation increased once by
+49,152 bytes and then remained constant through every later sample. Every
+channel retained its initial finite statistics because the final projection is
+initialized to exactly zero; this validates the intended identity recurrence
+and bounded inference memory, not the stability of a learned rule.
+
+Steady training timings begin after two optimizer steps: the recorded first-call
+step and a synchronized memory-probe step. The projections therefore represent
+warmed graph throughput and exclude first-call compilation. Bit-exact replay is
+specific to the recorded hardware and pinned PyTorch environment; compatibility
+metadata hard-fails, but exact arithmetic is not claimed across other runtimes.
+
+### Training-shaped rollout measurements
+
+| Rollout | Steady seconds/optimizer step | Highest synchronized MPS allocation | Projected steps in 10 min | Projected steps in 2 hr |
+|---:|---:|---:|---:|---:|
+| 1 | 0.00169 | 10.2 MiB | 354,792 | 4,257,500 |
+| 4 | 0.00504 | 33.4 MiB | 119,042 | 1,428,505 |
+| 8 | 0.00750 | 67.2 MiB | 80,027 | 960,321 |
+| 16 | 0.01805 | 134.9 MiB | 33,234 | 398,813 |
+| 32 | 0.03819 | 270.3 MiB | 15,712 | 188,545 |
+
+PyTorch MPS does not expose a resettable peak-memory statistic. The table
+therefore reports the highest synchronized `current_allocated_memory` snapshot
+before, after forward, after backward, and after the optimizer step. The forward
+snapshot was highest in every case, and allocation scaled approximately linearly
+with rollout length as expected.
+
+The measured graph leaves substantial runtime and memory headroom for the first
+learning experiment. The projections should not be interpreted as expected
+learning progress: Stage 1 must add a real teacher trajectory and objective, and
+its throughput must be measured rather than inferred from parameter count.
 
 ## H100 Scaling Boundary
 
