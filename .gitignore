@@ -1,0 +1,8 @@
+.DS_Store
+.env.local
+.venv/
+__pycache__/
+*.py[cod]
+outputs/
+checkpoints/
+wandb/
