@@ -128,6 +128,35 @@ One setup session. Each benchmark case should be minutes, not a training run.
 
 ## Stage 1: Learn Local Dynamics Without Audio
 
+### Result
+
+Stage 1 is partially established but has not passed for the intended
+asynchronous baseline. A bounded oscillatory reaction-diffusion teacher replaced
+an initial Gray-Scott teacher after repeated short-horizon fits amplified its
+autocatalytic growth into long-run explosion. This was a teacher-design failure,
+not evidence against local recurrence.
+
+With deterministic full-cell updates, the retained 2,000-step run trained in 68
+seconds and remained finite over 512 evaluation updates. Central and distributed
+initializations reached trajectory MSE 0.00879 and 0.01032, while predicted
+motion energy and total variation remained close to teacher values. Maximum
+state magnitude was 0.299 and 1.185 respectively. Their 16-step MSE was
+0.00000038 and 0.00000371. The fixed distributed-field comparison remains
+spatially coherent, although trajectory difference grows over the evaluation
+horizon.
+
+The initial stochastic-update comparison was confounded because a 0.5 fire rate
+halved each cell's effective clock relative to the teacher. A corrected run used
+a 0.05 teacher time step against the deterministic run's 0.1. It stayed bounded
+below 0.77 and retained low 16-step error, but 512-step MSE reached 0.165 and
+0.174 while motion decayed to roughly one-sixth of the teacher. The asynchronous
+failure therefore remains after clock compensation, without numerical
+explosion. An 8,000-step deterministic run also failed, reaching state
+magnitudes above 57 and 81. More optimization does not solve the problem. Stage
+2 must not begin until a stochastic-update rule passes the Stage 1 long-rollout
+gate. The next experiment should make asynchronous local time part of the
+teacher or objective rather than adding audio conditioning.
+
 ### Question
 
 Can the architecture learn a bounded local rule that produces coherent motion

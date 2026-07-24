@@ -234,6 +234,18 @@ replays must use the same masks. Evaluation should also compare deterministic
 full updates against stochastic updates to determine whether observed novelty
 comes from the learned rule or merely from injected noise.
 
+Stage 1 found that this comparison is material rather than cosmetic. The
+oscillatory teacher can be imitated coherently with deterministic full-cell
+updates, while the first 0.5-rate asynchronous run introduces phase noise and
+long-run drift. That comparison also changes effective local time: without
+explicit compensation, each cell advances half as often as the synchronous
+teacher. A clock-compensated comparison is therefore required before attributing
+the failure to asynchronous noise alone. That comparison used half the teacher
+time step and remained bounded, but motion decayed to roughly one-sixth of the
+teacher over 512 updates and trajectory MSE remained high. The asynchronous
+baseline remains the intended architecture and must pass before audio
+conditioning begins.
+
 ## Initialization
 
 At least two initialization families should be supported from the beginning:
@@ -282,6 +294,11 @@ luminance_t = sigmoid(S_t[:, visible_channel])
 or a fixed centered mapping if the state is explicitly bounded. The choice must
 remain constant across experiments so apparent improvement is not a contrast
 change.
+
+Stage 1 uses the fixed centered mapping
+`luminance_t = clamp(S_t[:, visible_channel] + 0.5, 0, 1)`. Native target,
+prediction, and raw absolute-difference arrays are saved before GIF encoding;
+only the human-facing difference image is amplified and clipped.
 
 Video assembly, resizing, and audio muxing occur after the NCA rollout. Upscale
 filters must be fixed and identified in artifacts. Evaluation metrics should be

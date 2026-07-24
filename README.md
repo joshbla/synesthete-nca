@@ -16,7 +16,7 @@ architecture is expected to accomplish, and how success will be falsified.
 
 ## Status
 
-**Stage 0 runtime and reproducibility gate passed on the target MPS machine.**
+**Stage 1 partially proves deterministic learned dynamics; asynchronous stability remains blocked.**
 
 The current work establishes:
 
@@ -28,9 +28,13 @@ The current work establishes:
 - the research evidence behind the decision and the evidence still missing.
 
 The repository now includes the exact unconditioned NCA core, strict checkpoint
-loading, deterministic stochastic-mask replay, and an MPS-only Stage 0
-benchmark. It does not yet include learned dynamics, an audio feature extractor,
-a rendering stack, a training pipeline, or cloud resources.
+loading, deterministic stochastic-mask replay, the MPS-only Stage 0 benchmark,
+and a Stage 1 oscillatory reaction-diffusion imitation diagnostic with fixed
+visual artifacts. A 2,000-step deterministic-update run remains coherent and
+bounded for 512 evaluation steps. A clock-compensated stochastic asynchronous
+run remains bounded but loses motion and trajectory alignment, while longer
+deterministic training becomes unstable. Audio conditioning therefore remains
+blocked.
 
 ## Setup
 
@@ -43,6 +47,7 @@ uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 uv run synesthete-benchmark smoke --output-dir outputs/stage0-smoke
+uv run synesthete-stage1 smoke --output-dir outputs/stage1-smoke
 ```
 
 The runtime check reports the Python and PyTorch versions, fails when the local
@@ -50,6 +55,13 @@ MPS backend is unavailable, and executes a small synchronized matrix operation
 on the GPU. The benchmark executes the real recurrent graph and refuses to run
 when MPS fallback is enabled. Use the `full` budget instead of `smoke` for the
 10,000-update stability trace and measured training rollout table.
+
+The Stage 1 `rapid` budget is the retained deterministic diagnostic. It writes a
+strict model-and-optimizer checkpoint, native evaluation arrays, animated target,
+prediction, and difference views, and a contact sheet. It is not evidence that
+the intended asynchronous rule is ready for audio control. The fixed
+`asynchronous` and `stress` budgets reproduce the two decision-relevant failure
+conditions.
 
 ## The Core Bet
 
