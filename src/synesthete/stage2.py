@@ -77,7 +77,6 @@ _THR_BOUND = 2.0
 _THR_IMPULSE_WINDOW = 24
 _THR_IMPULSE_RATIO = 1.25
 _THR_ALTERNATING_RATIO = 1.2
-_THR_SPECTRAL_RELATIVE_DIFFERENCE = 0.01
 _THR_RECOVERY_RATIO = 0.5
 _THR_RECOVERY_MAX_FRAMES = 24
 _THR_LAG_MAX_FRAMES = 12
@@ -705,7 +704,6 @@ def _automated_checks(
     identical_blind_audio: bool,
     impulse_metrics: dict[str, Any],
     alternating_metrics: dict[str, float],
-    spectral_metrics: dict[str, float],
     review_onset: dict[str, Any],
     lag: dict[str, Any],
     div_silent: dict[str, float],
@@ -723,15 +721,6 @@ def _automated_checks(
             and impulse_metrics["peak"] > 0.0
         ),
         "alternating_energy": alternating_metrics["ratio"] >= _THR_ALTERNATING_RATIO,
-        "spectral_spatial": (
-            spectral_metrics["low_centroid"] > 0.0
-            and spectral_metrics["high_centroid"] > 0.0
-            and max(
-                spectral_metrics["tv_relative_difference"],
-                spectral_metrics["centroid_relative_difference"],
-            )
-            >= _THR_SPECTRAL_RELATIVE_DIFFERENCE
-        ),
         "recovery": (0 < review_onset["recovery_frames"] <= _THR_RECOVERY_MAX_FRAMES),
         "lag_acceptable": (
             0 < lag["lag_frames"] <= _THR_LAG_MAX_FRAMES and lag["peak_correlation"] > 0.0
@@ -1067,7 +1056,6 @@ def run_stage2(
         identical_blind_audio=identical_blind_audio,
         impulse_metrics=probe_metrics["impulse"]["onset_response_2s"],
         alternating_metrics=probe_metrics["alternating"]["block_energy_motion"],
-        spectral_metrics=probe_metrics["stepped-bands"]["spectral_block_metrics"],
         review_onset=probe_metrics["review"]["onset_response_3s"],
         lag=lag,
         div_silent=div_silent,

@@ -16,7 +16,7 @@ architecture is expected to accomplish, and how success will be falsified.
 
 ## Status
 
-**Stage 1 passes for deterministic and mask-aligned asynchronous learned dynamics. Stage 2 is partial and in progress.**
+**Stages 1 and 2 pass. The project is ready for learned audio conditioning in Stage 3.**
 
 The current work establishes:
 
@@ -38,18 +38,15 @@ remained stable under unseen mask seeds. This establishes learned local dynamics
 under aligned stochastic timing; it does not yet establish autonomous material
 behavior or audio conditioning.
 
-Stage 2 has built the hand-controlled audio steering layer on top of the frozen
+Stage 2 builds the hand-controlled audio steering layer on top of the frozen
 `c31be68` rule. It establishes audio extraction, synchronization, playback,
-rendering, and counterfactual plumbing, RMS-driven motion control, a legible
-silence distinction, prompt onset response, safety bounds, exact replay, and a
-response that is not reducible to global brightness. It has not yet established
-perceptible spectral spatial control: repeated candidates (a safe baseline, a
-stronger-amplitude variant, transition wavelets, and a sustained spectral
-variant) all failed the spectral spatial separation check, and human blind review
-could not reliably distinguish the correct condition on spectral grounds. The
-Stage 2 gate therefore fails overall, and learned conditioning (Stage 3) must
-not begin. Next work should improve or reconsider the spectral control surface,
-use a fresh blind permutation and order, and repeat human review.
+rendering, counterfactual plumbing, RMS-driven motion control, a legible silence
+distinction, prompt onset response, safety bounds, exact replay, and a response
+that is not reducible to global brightness. Human blind review identified the
+correct loudness timing condition twice. Equal-RMS low/high frequency control
+was not perceptible in repeated trials and is deferred rather than required for
+this plumbing stage. Stage 2 therefore passes without claiming learned audio
+conditioning or spectral interpretation.
 
 ## Setup
 

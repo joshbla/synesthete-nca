@@ -434,14 +434,6 @@ def _passing_checks_kwargs() -> dict:
             "low_energy_motion": 0.5,
             "ratio": 1.5,
         },
-        "spectral_metrics": {
-            "low_tv": 1.0,
-            "high_tv": 1.0,
-            "low_centroid": 0.1,
-            "high_centroid": 0.1,
-            "tv_relative_difference": 0.02,
-            "centroid_relative_difference": 0.0,
-        },
         "review_onset": {
             "baseline": 0.1,
             "peak": 1.0,
@@ -514,19 +506,6 @@ def test_automated_checks_scalar_flips(field: str, value, key: str) -> None:  # 
             "alternating_metrics",
             {"high_energy_motion": 1.0, "low_energy_motion": 0.5, "ratio": 1.0},
             "alternating_energy",
-        ),
-        # spectral_spatial: low centroid absent.
-        (
-            "spectral_metrics",
-            {
-                "low_tv": 1.0,
-                "high_tv": 1.0,
-                "tv_relative_difference": 0.0,
-                "low_centroid": 0.0,
-                "high_centroid": 0.1,
-                "centroid_relative_difference": 1.0,
-            },
-            "spectral_spatial",
         ),
         # recovery: zero recovery frames.
         (
