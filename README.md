@@ -16,7 +16,7 @@ architecture is expected to accomplish, and how success will be falsified.
 
 ## Status
 
-**Stage 1 partially proves deterministic learned dynamics; asynchronous stability remains blocked.**
+**Stage 1 passes for deterministic and mask-aligned asynchronous learned dynamics.**
 
 The current work establishes:
 
@@ -31,10 +31,12 @@ The repository now includes the exact unconditioned NCA core, strict checkpoint
 loading, deterministic stochastic-mask replay, the MPS-only Stage 0 benchmark,
 and a Stage 1 oscillatory reaction-diffusion imitation diagnostic with fixed
 visual artifacts. A 2,000-step deterministic-update run remains coherent and
-bounded for 512 evaluation steps. A clock-compensated stochastic asynchronous
-run remains bounded but loses motion and trajectory alignment, while longer
-deterministic training becomes unstable. Audio conditioning therefore remains
-blocked.
+bounded for 512 evaluation steps. A clock-compensated asynchronous NCA failed
+against a synchronous teacher, but a 2,000-step run passed when the teacher and
+NCA received the same recorded 0.5-rate fire masks. It also replayed exactly and
+remained stable under unseen mask seeds. This establishes learned local dynamics
+under aligned stochastic timing; it does not yet establish autonomous material
+behavior or audio conditioning.
 
 ## Setup
 
@@ -48,6 +50,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run synesthete-benchmark smoke --output-dir outputs/stage0-smoke
 uv run synesthete-stage1 smoke --output-dir outputs/stage1-smoke
+uv run synesthete-stage1 mask-aligned-smoke --output-dir outputs/stage1-mask-aligned-smoke
 ```
 
 The runtime check reports the Python and PyTorch versions, fails when the local
@@ -59,9 +62,11 @@ when MPS fallback is enabled. Use the `full` budget instead of `smoke` for the
 The Stage 1 `rapid` budget is the retained deterministic diagnostic. It writes a
 strict model-and-optimizer checkpoint, native evaluation arrays, animated target,
 prediction, and difference views, and a contact sheet. It is not evidence that
-the intended asynchronous rule is ready for audio control. The fixed
-`asynchronous` and `stress` budgets reproduce the two decision-relevant failure
-conditions.
+an autonomous material or audio control has been learned. The
+`mask-aligned-rapid` budget is the retained asynchronous diagnostic; it adds
+exact replay and alternate-mask evaluations for both initialization families.
+The fixed `asynchronous` and `stress` budgets reproduce the two
+decision-relevant failure conditions.
 
 ## The Core Bet
 

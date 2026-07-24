@@ -369,17 +369,20 @@ its throughput must be measured rather than inferred from parameter count.
 
 ## Measured Stage 1 Training
 
-The retained Stage 1 deterministic diagnostic completed 2,000 optimizer steps
-in 68 seconds, or about 29 steps per second, using batch 4 and randomized
-rollouts of 2-8 updates. This includes CPU-resident teacher-window selection and
-MPS forward/backward work, but not teacher-trajectory generation or artifact
-rendering.
+The clean retained Stage 1 deterministic diagnostic completed 2,000 optimizer
+steps in 49 seconds, or about 40 steps per second, using batch 4 and randomized
+rollouts of 2-8 updates. This supersedes the earlier 68-second measurement. The
+mask-aligned asynchronous diagnostic completed the same optimizer budget in 65
+seconds, or about 31 steps per second. These measurements include CPU-resident
+teacher-window and recorded-mask selection plus MPS forward/backward work, but
+not teacher-trajectory generation or artifact rendering.
 
 Increasing the budget to 8,000 steps with 4-16-update rollouts took 495 seconds,
 or about 16 steps per second, and produced a substantially less stable rule.
 Throughput was still well inside the local budget; experiment quality, not
-compute, was the limiting factor. This is direct evidence that a longer run is
-not currently justified as a route to stability.
+compute, was the limiting factor. This is direct evidence that a longer run was
+not justified as a route to deterministic stability. The later mask-aligned run
+passed without increasing the optimization budget.
 
 ## H100 Scaling Boundary
 

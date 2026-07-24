@@ -242,9 +242,18 @@ explicit compensation, each cell advances half as often as the synchronous
 teacher. A clock-compensated comparison is therefore required before attributing
 the failure to asynchronous noise alone. That comparison used half the teacher
 time step and remained bounded, but motion decayed to roughly one-sixth of the
-teacher over 512 updates and trajectory MSE remained high. The asynchronous
-baseline remains the intended architecture and must pass before audio
-conditioning begins.
+teacher over 512 updates and trajectory MSE remained high.
+
+A subsequent comparison made the teacher asynchronous by applying its residual
+through a recorded 0.5-rate per-cell mask and supplying the exact corresponding
+mask to the NCA. With the original 0.1 teacher time step, that rule remained
+below state magnitude 0.65, reached 512-step MSE below 0.008 on both
+initializations, replayed bit-for-bit, and produced nearly identical results
+under unseen mask seeds. Motion, total variation, and spatial spectral centroid
+remained close to the teacher. This passes the asynchronous Stage 1 gate and
+shows that the prior teacher/update schedule mismatch, rather than stochastic
+updates themselves, caused the retained failure. It does not establish that
+every synchronous target is compatible with asynchronous imitation.
 
 ## Initialization
 

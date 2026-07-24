@@ -130,14 +130,14 @@ One setup session. Each benchmark case should be minutes, not a training run.
 
 ### Result
 
-Stage 1 is partially established but has not passed for the intended
-asynchronous baseline. A bounded oscillatory reaction-diffusion teacher replaced
-an initial Gray-Scott teacher after repeated short-horizon fits amplified its
+Stage 1 passes for the intended asynchronous baseline when teacher and NCA local
+clocks are aligned. A bounded oscillatory reaction-diffusion teacher replaced an
+initial Gray-Scott teacher after repeated short-horizon fits amplified its
 autocatalytic growth into long-run explosion. This was a teacher-design failure,
 not evidence against local recurrence.
 
-With deterministic full-cell updates, the retained 2,000-step run trained in 68
-seconds and remained finite over 512 evaluation updates. Central and distributed
+With deterministic full-cell updates, the clean retained 2,000-step run trained
+in 49 seconds and remained finite over 512 evaluation updates. Central and distributed
 initializations reached trajectory MSE 0.00879 and 0.01032, while predicted
 motion energy and total variation remained close to teacher values. Maximum
 state magnitude was 0.299 and 1.185 respectively. Their 16-step MSE was
@@ -149,13 +149,26 @@ The initial stochastic-update comparison was confounded because a 0.5 fire rate
 halved each cell's effective clock relative to the teacher. A corrected run used
 a 0.05 teacher time step against the deterministic run's 0.1. It stayed bounded
 below 0.77 and retained low 16-step error, but 512-step MSE reached 0.165 and
-0.174 while motion decayed to roughly one-sixth of the teacher. The asynchronous
-failure therefore remains after clock compensation, without numerical
-explosion. An 8,000-step deterministic run also failed, reaching state
-magnitudes above 57 and 81. More optimization does not solve the problem. Stage
-2 must not begin until a stochastic-update rule passes the Stage 1 long-rollout
-gate. The next experiment should make asynchronous local time part of the
-teacher or objective rather than adding audio conditioning.
+0.174 while motion decayed to roughly one-sixth of the teacher. An 8,000-step
+deterministic run also failed, reaching state magnitudes above 57 and 81. More
+optimization was not a stability solution.
+
+The clean `c31be68` mask-aligned run applied the original teacher residual
+through recorded 0.5-rate per-cell masks and supplied each same mask to the NCA.
+It trained for 2,000 steps in 65 seconds and passed all 512-step checks. Recorded
+mask central/distributed MSE was 0.00212/0.00711; unseen-mask MSE was
+0.00211/0.00705. All 16-step MSE values were below 0.000005, maximum state
+magnitude remained below 0.65, and predicted motion, total variation, and
+spectral centroid remained close to teacher values. Exact state-trajectory
+replay passed for both initializations. Human review found coherent behavior and
+no recurrence of the prior grid-scale phase noise. The retained artifacts are
+under `outputs/stage1-mask-aligned-rapid-c31be68`.
+
+This result attributes the prior asynchronous failure to supervision against a
+teacher with a different local update schedule. Similar performance under an
+unseen mask seed argues against memorization of one stochastic sequence. It
+establishes asynchronous teacher imitation only; autonomous material behavior
+and audio control remain unproven.
 
 ### Question
 
@@ -194,11 +207,18 @@ primitives. Its exact equations and parameters become part of the test fixture.
 
 ### Gate
 
-- The NCA produces recognizable coherent dynamics rather than only matching a
-  static frame.
-- Motion remains nonzero and bounded during a long free rollout.
-- The state does not collapse immediately when rolled beyond the supervised
-  horizon.
+- No NaN or Inf.
+- Maximum state magnitude remains below 2.0 over the complete evaluation.
+- The 16-step MSE remains below `1e-4`.
+- The 512-step trajectory MSE remains below `0.02`.
+- Predicted motion remains within a factor of four of teacher motion.
+- Total variation and spatial spectral centroid remain within a factor of two
+  of the teacher.
+- The complete state trajectory replays exactly from the same initial state and
+  recorded mask seed.
+- A different recorded mask seed remains stable, accurate, and coherent.
+- Human review confirms spatially coherent dynamics rather than static output,
+  grid-scale phase noise, or structureless flicker.
 
 ### Failure interpretation
 
