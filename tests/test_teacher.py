@@ -3,8 +3,10 @@ import torch
 from synesthete.teacher import (
     REACTION_DIFFUSION_CONFIG,
     encode_teacher_fields,
+    generate_masked_teacher_trajectory,
     generate_teacher_trajectory,
     make_teacher_fields,
+    masked_reaction_diffusion_step,
     periodic_laplacian,
     reaction_diffusion_step,
     render_luminance,
@@ -68,6 +70,32 @@ def test_distributed_initialization_remains_spatially_distributed() -> None:
 
     assert torch.count_nonzero(fields[:, 1]) > 32
     assert torch.isfinite(reaction_diffusion_step(fields, REACTION_DIFFUSION_CONFIG)).all()
+
+
+def test_masked_teacher_only_updates_firing_cells_and_replays() -> None:
+    fields = torch.randn(1, 2, 16, 16, generator=torch.Generator().manual_seed(73)).mul_(0.1)
+    fire_masks = torch.zeros(3, 1, 1, 16, 16)
+    fire_masks[:, :, :, ::2, 1::2] = 1.0
+
+    updated = masked_reaction_diffusion_step(
+        fields,
+        fire_masks[0],
+        REACTION_DIFFUSION_CONFIG,
+    )
+    first = generate_masked_teacher_trajectory(
+        fields,
+        fire_masks=fire_masks,
+        config=REACTION_DIFFUSION_CONFIG,
+    )
+    second = generate_masked_teacher_trajectory(
+        fields,
+        fire_masks=fire_masks,
+        config=REACTION_DIFFUSION_CONFIG,
+    )
+
+    assert torch.equal(updated[:, :, 1::2, ::2], fields[:, :, 1::2, ::2])
+    assert not torch.equal(updated[:, :, ::2, 1::2], fields[:, :, ::2, 1::2])
+    assert torch.equal(first, second)
 
 
 def test_teacher_encoding_and_render_mapping_are_fixed() -> None:

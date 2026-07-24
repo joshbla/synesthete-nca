@@ -69,6 +69,24 @@ def reaction_diffusion_step(fields: Tensor, config: ReactionDiffusionConfig) -> 
     return torch.cat((a + config.time_step * da, b + config.time_step * db), dim=1)
 
 
+def masked_reaction_diffusion_step(
+    fields: Tensor,
+    fire_mask: Tensor,
+    config: ReactionDiffusionConfig,
+) -> Tensor:
+    expected_shape = (fields.shape[0], 1, fields.shape[2], fields.shape[3])
+    if fire_mask.shape != expected_shape:
+        raise ValueError(
+            f"Expected teacher fire mask shape {expected_shape}, received {tuple(fire_mask.shape)}"
+        )
+    if fire_mask.device != fields.device:
+        raise ValueError("Teacher fields and fire mask must be on the same device")
+    if fire_mask.dtype != fields.dtype:
+        raise ValueError("Teacher fields and fire mask must have the same dtype")
+    next_fields = reaction_diffusion_step(fields, config)
+    return fields + fire_mask * (next_fields - fields)
+
+
 def make_teacher_fields(
     *,
     initialization: Initialization,
@@ -125,6 +143,43 @@ def generate_teacher_trajectory(
             fields = reaction_diffusion_step(fields, config)
             if not torch.isfinite(fields).all():
                 raise RuntimeError(f"Teacher became non-finite at step {step}")
+            trajectory[step].copy_(fields)
+    return trajectory
+
+
+def generate_masked_teacher_trajectory(
+    initial_fields: Tensor,
+    *,
+    fire_masks: Tensor,
+    config: ReactionDiffusionConfig,
+) -> Tensor:
+    if initial_fields.ndim != 4 or initial_fields.shape[1] != 2:
+        raise ValueError("Initial teacher fields must have shape (batch, 2, height, width)")
+    if initial_fields.dtype != torch.float32:
+        raise ValueError("Stage 1 teacher requires fp32 fields")
+    if fire_masks.ndim != 5 or fire_masks.shape[0] <= 0:
+        raise ValueError("Teacher fire masks must have shape (step, batch, 1, height, width)")
+    if fire_masks.shape[1:] != (
+        initial_fields.shape[0],
+        1,
+        initial_fields.shape[2],
+        initial_fields.shape[3],
+    ):
+        raise ValueError("Teacher fire masks do not match the initial fields")
+    if fire_masks.device != initial_fields.device or fire_masks.dtype != initial_fields.dtype:
+        raise ValueError("Teacher fire masks must match the initial fields device and dtype")
+    trajectory = torch.empty(
+        (fire_masks.shape[0] + 1, *initial_fields.shape),
+        device=initial_fields.device,
+        dtype=torch.float32,
+    )
+    fields = initial_fields
+    trajectory[0].copy_(fields)
+    with torch.no_grad():
+        for step, fire_mask in enumerate(fire_masks, start=1):
+            fields = masked_reaction_diffusion_step(fields, fire_mask, config)
+            if not torch.isfinite(fields).all():
+                raise RuntimeError(f"Masked teacher became non-finite at step {step}")
             trajectory[step].copy_(fields)
     return trajectory
 

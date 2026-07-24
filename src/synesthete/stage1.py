@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -10,7 +11,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
@@ -23,8 +24,10 @@ from synesthete.teacher import (
     REACTION_DIFFUSION_CONFIG,
     ReactionDiffusionConfig,
     encode_teacher_fields,
+    generate_masked_teacher_trajectory,
     generate_teacher_trajectory,
     make_teacher_fields,
+    masked_reaction_diffusion_step,
     reaction_diffusion_step,
     render_luminance,
 )
@@ -35,6 +38,15 @@ TRAINING_DATA_SEEDS = (4102, 4103)
 SELECTION_SEED = 4104
 MASK_SEED = 4105
 EVALUATION_SEEDS = (4106, 4107)
+TRAINING_MASK_SEEDS = (MASK_SEED, MASK_SEED + 1)
+EVALUATION_MASK_SEEDS = (4205, 4206)
+ALTERNATE_MASK_SEEDS = (4305, 4306)
+
+UpdateSchedule = Literal[
+    "deterministic",
+    "mismatched_asynchronous",
+    "mask_aligned_asynchronous",
+]
 
 
 @dataclass(frozen=True)
@@ -51,7 +63,7 @@ class Stage1Budget:
     learning_rate: float
     hidden_loss_weight: float
     overflow_loss_weight: float
-    stochastic_updates: bool
+    update_schedule: UpdateSchedule
     teacher_time_step: float
 
     def to_dict(self) -> dict[str, Any]:
@@ -71,7 +83,7 @@ SMOKE_BUDGET = Stage1Budget(
     learning_rate=1e-3,
     hidden_loss_weight=1e-4,
     overflow_loss_weight=1.0,
-    stochastic_updates=True,
+    update_schedule="mismatched_asynchronous",
     teacher_time_step=0.05,
 )
 RAPID_BUDGET = Stage1Budget(
@@ -87,7 +99,7 @@ RAPID_BUDGET = Stage1Budget(
     learning_rate=1e-3,
     hidden_loss_weight=1e-2,
     overflow_loss_weight=1.0,
-    stochastic_updates=False,
+    update_schedule="deterministic",
     teacher_time_step=0.1,
 )
 ASYNCHRONOUS_BUDGET = Stage1Budget(
@@ -103,7 +115,7 @@ ASYNCHRONOUS_BUDGET = Stage1Budget(
     learning_rate=1e-3,
     hidden_loss_weight=1e-2,
     overflow_loss_weight=1.0,
-    stochastic_updates=True,
+    update_schedule="mismatched_asynchronous",
     teacher_time_step=0.05,
 )
 STRESS_BUDGET = Stage1Budget(
@@ -119,9 +131,35 @@ STRESS_BUDGET = Stage1Budget(
     learning_rate=5e-4,
     hidden_loss_weight=1e-2,
     overflow_loss_weight=1.0,
-    stochastic_updates=False,
+    update_schedule="deterministic",
     teacher_time_step=0.1,
 )
+MASK_ALIGNED_SMOKE_BUDGET = replace(
+    SMOKE_BUDGET,
+    name="mask-aligned-smoke",
+    update_schedule="mask_aligned_asynchronous",
+    teacher_time_step=0.1,
+)
+MASK_ALIGNED_RAPID_BUDGET = replace(
+    RAPID_BUDGET,
+    name="mask-aligned-rapid",
+    update_schedule="mask_aligned_asynchronous",
+)
+
+
+@dataclass(frozen=True)
+class TrainingData:
+    trajectories: Tensor
+    fire_masks: Tensor
+
+
+@dataclass(frozen=True)
+class EvaluationRollout:
+    metrics: dict[str, Any]
+    target: Tensor
+    prediction: Tensor
+    initial_state: Tensor
+    fire_masks: Tensor
 
 
 def _require_mps_without_fallback() -> torch.device:
@@ -160,9 +198,15 @@ def _make_model(device: torch.device) -> NeuralCellularAutomaton:
 def _build_training_trajectories(
     budget: Stage1Budget,
     teacher_config: ReactionDiffusionConfig,
-) -> Tensor:
+) -> TrainingData:
     trajectories = []
-    for initialization, seed in zip(("central", "distributed"), TRAINING_DATA_SEEDS, strict=True):
+    fire_mask_sequences = []
+    for initialization, seed, mask_seed in zip(
+        ("central", "distributed"),
+        TRAINING_DATA_SEEDS,
+        TRAINING_MASK_SEEDS,
+        strict=True,
+    ):
         generator = torch.Generator(device="cpu").manual_seed(seed)
         fields = make_teacher_fields(
             initialization=initialization,
@@ -171,30 +215,76 @@ def _build_training_trajectories(
             device=torch.device("cpu"),
             generator=generator,
         )
-        trajectory = generate_teacher_trajectory(
-            fields,
-            steps=budget.teacher_steps,
-            config=teacher_config,
-        )
+        if budget.update_schedule == "mask_aligned_asynchronous":
+            fire_masks = _sample_fire_masks(
+                steps=budget.teacher_steps,
+                batch_size=1,
+                grid_size=GRID_SIZE,
+                device=torch.device("cpu"),
+                generator=torch.Generator(device="cpu").manual_seed(mask_seed),
+            )
+            trajectory = generate_masked_teacher_trajectory(
+                fields,
+                fire_masks=fire_masks,
+                config=teacher_config,
+            )
+        else:
+            fire_masks = torch.ones(
+                (budget.teacher_steps, 1, 1, GRID_SIZE, GRID_SIZE),
+                dtype=torch.float32,
+            )
+            trajectory = generate_teacher_trajectory(
+                fields,
+                steps=budget.teacher_steps,
+                config=teacher_config,
+            )
         trajectories.append(trajectory[:, 0])
-    return torch.stack(trajectories)
+        fire_mask_sequences.append(fire_masks[:, 0])
+    return TrainingData(
+        trajectories=torch.stack(trajectories),
+        fire_masks=torch.stack(fire_mask_sequences),
+    )
+
+
+def _sample_fire_masks(
+    *,
+    steps: int,
+    batch_size: int,
+    grid_size: int,
+    device: torch.device,
+    generator: torch.Generator,
+) -> Tensor:
+    return (
+        torch.rand(
+            (steps, batch_size, 1, grid_size, grid_size),
+            device=device,
+            dtype=torch.float32,
+            generator=generator,
+        )
+        < BASELINE_CONFIG.fire_rate
+    ).to(dtype=torch.float32)
 
 
 def _sample_training_window(
-    trajectories: Tensor,
+    training_data: TrainingData,
     *,
     batch_size: int,
     rollout_length: int,
     generator: torch.Generator,
-) -> tuple[Tensor, Tensor]:
-    family_indices = torch.randint(0, trajectories.shape[0], (batch_size,), generator=generator)
-    maximum_start = trajectories.shape[1] - rollout_length
+) -> tuple[Tensor, Tensor, Tensor]:
+    family_indices = torch.randint(
+        0,
+        training_data.trajectories.shape[0],
+        (batch_size,),
+        generator=generator,
+    )
+    maximum_start = training_data.trajectories.shape[1] - rollout_length
     start_indices = torch.randint(0, maximum_start, (batch_size,), generator=generator)
     families = family_indices.tolist()
     starts = start_indices.tolist()
     initial_fields = torch.stack(
         [
-            trajectories[family_index, start_index]
+            training_data.trajectories[family_index, start_index]
             for family_index, start_index in zip(families, starts, strict=True)
         ]
     )
@@ -202,26 +292,38 @@ def _sample_training_window(
         [
             torch.stack(
                 [
-                    trajectories[family_index, start_index + offset]
+                    training_data.trajectories[family_index, start_index + offset]
                     for family_index, start_index in zip(families, starts, strict=True)
                 ]
             )
             for offset in range(1, rollout_length + 1)
         ]
     )
-    return initial_fields, targets
+    fire_masks = torch.stack(
+        [
+            torch.stack(
+                [
+                    training_data.fire_masks[family_index, start_index + offset - 1]
+                    for family_index, start_index in zip(families, starts, strict=True)
+                ]
+            )
+            for offset in range(1, rollout_length + 1)
+        ]
+    )
+    return initial_fields, targets, fire_masks
 
 
 def compute_training_loss(
     model: NeuralCellularAutomaton,
     initial_fields: Tensor,
     target_fields: Tensor,
+    fire_masks: Tensor,
     *,
     teacher_config: ReactionDiffusionConfig,
     mask_generator: torch.Generator,
     hidden_loss_weight: float,
     overflow_loss_weight: float,
-    stochastic_updates: bool,
+    update_schedule: UpdateSchedule,
 ) -> tuple[Tensor, Tensor]:
     state = encode_teacher_fields(
         initial_fields,
@@ -231,15 +333,14 @@ def compute_training_loss(
     trajectory_loss = torch.zeros((), device=state.device)
     overflow_loss = torch.zeros((), device=state.device)
     hidden_loss = torch.zeros((), device=state.device)
-    for target_fields_step in target_fields:
-        if stochastic_updates:
-            fire_mask = model.sample_fire_mask(state, mask_generator)
-        else:
-            fire_mask = torch.ones(
-                (state.shape[0], 1, state.shape[2], state.shape[3]),
-                device=state.device,
-                dtype=state.dtype,
-            )
+    for target_fields_step, recorded_fire_mask in zip(target_fields, fire_masks, strict=True):
+        fire_mask = _model_fire_mask(
+            model,
+            state,
+            recorded_fire_mask,
+            update_schedule=update_schedule,
+            mask_generator=mask_generator,
+        )
         state = model(state, fire_mask)
         target_state = encode_teacher_fields(
             target_fields_step,
@@ -259,10 +360,25 @@ def compute_training_loss(
     return total, state
 
 
+def _model_fire_mask(
+    model: NeuralCellularAutomaton,
+    state: Tensor,
+    recorded_fire_mask: Tensor,
+    *,
+    update_schedule: UpdateSchedule,
+    mask_generator: torch.Generator,
+) -> Tensor:
+    if update_schedule == "mismatched_asynchronous":
+        return model.sample_fire_mask(state, mask_generator)
+    if update_schedule in ("deterministic", "mask_aligned_asynchronous"):
+        return recorded_fire_mask
+    raise ValueError(f"Unsupported update schedule: {update_schedule}")
+
+
 def _train(
     model: NeuralCellularAutomaton,
     optimizer: torch.optim.Optimizer,
-    trajectories: Tensor,
+    training_data: TrainingData,
     budget: Stage1Budget,
     teacher_config: ReactionDiffusionConfig,
     device: torch.device,
@@ -282,24 +398,26 @@ def _train(
                 generator=selection_generator,
             ).item()
         )
-        initial_fields, target_fields = _sample_training_window(
-            trajectories,
+        initial_fields, target_fields, fire_masks = _sample_training_window(
+            training_data,
             batch_size=budget.batch_size,
             rollout_length=rollout_length,
             generator=selection_generator,
         )
         initial_fields = initial_fields.to(device)
         target_fields = target_fields.to(device)
+        fire_masks = fire_masks.to(device)
         optimizer.zero_grad(set_to_none=True)
         loss, final_state = compute_training_loss(
             model,
             initial_fields,
             target_fields,
+            fire_masks,
             teacher_config=teacher_config,
             mask_generator=mask_generator,
             hidden_loss_weight=budget.hidden_loss_weight,
             overflow_loss_weight=budget.overflow_loss_weight,
-            stochastic_updates=budget.stochastic_updates,
+            update_schedule=budget.update_schedule,
         )
         if not torch.isfinite(loss) or not torch.isfinite(final_state).all():
             raise RuntimeError(f"Non-finite training state at optimizer step {optimizer_step}")
@@ -357,7 +475,7 @@ def _evaluate_initialization(
     budget: Stage1Budget,
     teacher_config: ReactionDiffusionConfig,
     device: torch.device,
-) -> tuple[dict[str, Any], Tensor, Tensor]:
+) -> EvaluationRollout:
     generator = torch.Generator(device=device).manual_seed(seed)
     fields = make_teacher_fields(
         initialization=initialization,
@@ -366,53 +484,99 @@ def _evaluate_initialization(
         device=device,
         generator=generator,
     )
+    if budget.update_schedule == "mask_aligned_asynchronous":
+        teacher_fire_masks = _sample_fire_masks(
+            steps=budget.evaluation_burn_in + budget.evaluation_steps,
+            batch_size=1,
+            grid_size=GRID_SIZE,
+            device=device,
+            generator=torch.Generator(device=device).manual_seed(mask_seed),
+        )
+    else:
+        teacher_fire_masks = torch.ones(
+            (
+                budget.evaluation_burn_in + budget.evaluation_steps,
+                1,
+                1,
+                GRID_SIZE,
+                GRID_SIZE,
+            ),
+            device=device,
+            dtype=torch.float32,
+        )
     with torch.no_grad():
-        for _ in range(budget.evaluation_burn_in):
-            fields = reaction_diffusion_step(fields, teacher_config)
+        for burn_in_step in range(budget.evaluation_burn_in):
+            if budget.update_schedule == "mask_aligned_asynchronous":
+                fields = masked_reaction_diffusion_step(
+                    fields,
+                    teacher_fire_masks[burn_in_step],
+                    teacher_config,
+                )
+            else:
+                fields = reaction_diffusion_step(fields, teacher_config)
         state = encode_teacher_fields(
             fields,
             state_channels=model.config.state_channels,
             config=teacher_config,
         )
+        initial_state = state[0].clone()
         target_frames = [render_luminance(state, teacher_config)[0]]
         prediction_frames = [target_frames[0].clone()]
         mask_generator = torch.Generator(device=device).manual_seed(mask_seed)
+        applied_fire_masks = []
+        trajectory_digest = hashlib.sha256()
+        trajectory_digest.update(state.detach().cpu().contiguous().numpy().tobytes())
         squared_error = torch.zeros((), device=device)
         short_squared_error = torch.zeros((), device=device)
         per_channel_minimum = state.amin(dim=(0, 2, 3))
         per_channel_maximum = state.amax(dim=(0, 2, 3))
+        maximum_state_magnitude = state.abs().max()
         for step in range(1, budget.evaluation_steps + 1):
-            fields = reaction_diffusion_step(fields, teacher_config)
+            recorded_fire_mask = teacher_fire_masks[budget.evaluation_burn_in + step - 1]
+            if budget.update_schedule == "mask_aligned_asynchronous":
+                fields = masked_reaction_diffusion_step(
+                    fields,
+                    recorded_fire_mask,
+                    teacher_config,
+                )
+            else:
+                fields = reaction_diffusion_step(fields, teacher_config)
             target_state = encode_teacher_fields(
                 fields,
                 state_channels=model.config.state_channels,
                 config=teacher_config,
             )
-            if budget.stochastic_updates:
-                fire_mask = model.sample_fire_mask(state, mask_generator)
-            else:
-                fire_mask = torch.ones(
-                    (state.shape[0], 1, state.shape[2], state.shape[3]),
-                    device=state.device,
-                    dtype=state.dtype,
-                )
+            fire_mask = _model_fire_mask(
+                model,
+                state,
+                recorded_fire_mask,
+                update_schedule=budget.update_schedule,
+                mask_generator=mask_generator,
+            )
+            applied_fire_masks.append(fire_mask[0].clone())
             state = model(state, fire_mask)
+            if not torch.isfinite(fields).all() or not torch.isfinite(state).all():
+                raise RuntimeError(f"Non-finite {initialization} evaluation state at step {step}")
+            trajectory_digest.update(state.detach().cpu().contiguous().numpy().tobytes())
             step_error = (state[:, :2] - target_state[:, :2]).square().mean()
             squared_error = squared_error + step_error
             if step <= 16:
                 short_squared_error = short_squared_error + step_error
             per_channel_minimum = torch.minimum(per_channel_minimum, state.amin(dim=(0, 2, 3)))
             per_channel_maximum = torch.maximum(per_channel_maximum, state.amax(dim=(0, 2, 3)))
+            maximum_state_magnitude = torch.maximum(maximum_state_magnitude, state.abs().max())
             if step % budget.render_stride == 0:
                 target_frames.append(render_luminance(target_state, teacher_config)[0])
                 prediction_frames.append(render_luminance(state, teacher_config)[0])
         target_render = torch.stack(target_frames)
         prediction_render = torch.stack(prediction_frames)
-        finite = bool(torch.isfinite(state).all().item())
+        applied_fire_mask_tensor = torch.stack(applied_fire_masks)
         final_variance = state.var(dim=(0, 2, 3), unbiased=False)
         metrics = {
             "initialization": initialization,
-            "finite": finite,
+            "state_seed": seed,
+            "mask_seed": mask_seed,
+            "finite": True,
             "trajectory_mse": (squared_error / budget.evaluation_steps).item(),
             "short_16_step_mse": (short_squared_error / min(16, budget.evaluation_steps)).item(),
             "target_motion_energy": _motion_energy(target_render),
@@ -421,49 +585,33 @@ def _evaluate_initialization(
             "prediction_total_variation": _total_variation(prediction_render),
             "target_spatial_spectral_centroid": _spatial_spectral_centroid(target_render),
             "prediction_spatial_spectral_centroid": _spatial_spectral_centroid(prediction_render),
-            "maximum_state_magnitude": state.abs().max().item(),
+            "maximum_state_magnitude": maximum_state_magnitude.item(),
+            "initial_state_hash": _tensor_hash(initial_state),
+            "fire_mask_hash": _tensor_hash(applied_fire_mask_tensor),
+            "state_trajectory_hash": trajectory_digest.hexdigest(),
             "per_channel_minimum": per_channel_minimum.cpu().tolist(),
             "per_channel_maximum": per_channel_maximum.cpu().tolist(),
             "final_per_channel_variance": final_variance.cpu().tolist(),
         }
-    return metrics, target_render, prediction_render
-
-
-def _evaluate(
-    model: NeuralCellularAutomaton,
-    budget: Stage1Budget,
-    teacher_config: ReactionDiffusionConfig,
-    device: torch.device,
-    output_dir: Path,
-) -> dict[str, Any]:
-    evaluations = []
-    artifact_target = None
-    artifact_prediction = None
-    for index, (initialization, seed) in enumerate(
-        zip(("central", "distributed"), EVALUATION_SEEDS, strict=True)
-    ):
-        metrics, target, prediction = _evaluate_initialization(
-            model,
-            initialization=initialization,
-            seed=seed,
-            mask_seed=MASK_SEED + 100 + index,
-            budget=budget,
-            teacher_config=teacher_config,
-            device=device,
-        )
-        evaluations.append(metrics)
-        if initialization == "distributed":
-            artifact_target = target
-            artifact_prediction = prediction
-    if artifact_target is None or artifact_prediction is None:
-        raise RuntimeError("Distributed evaluation artifact was not produced")
-    visuals = save_stage1_visuals(
-        output_dir,
-        target=artifact_target,
-        prediction=artifact_prediction,
-        frame_rate=15,
+    return EvaluationRollout(
+        metrics=metrics,
+        target=target_render,
+        prediction=prediction_render,
+        initial_state=initial_state,
+        fire_masks=applied_fire_mask_tensor,
     )
-    automated_checks = {
+
+
+def _tensor_hash(tensor: Tensor) -> str:
+    return hashlib.sha256(tensor.detach().cpu().contiguous().numpy().tobytes()).hexdigest()
+
+
+def _ratio_is_comparable(prediction: float, target: float, *, factor: float) -> bool:
+    return target > 0.0 and 1.0 / factor <= prediction / target <= factor
+
+
+def _standard_automated_checks(evaluations: list[dict[str, Any]]) -> dict[str, bool]:
+    return {
         "all_finite": all(evaluation["finite"] for evaluation in evaluations),
         "all_states_bounded_below_two": all(
             evaluation["maximum_state_magnitude"] < 2.0 for evaluation in evaluations
@@ -476,13 +624,117 @@ def _evaluate(
             evaluation["trajectory_mse"] < 2e-2 for evaluation in evaluations
         ),
         "motion_rate_comparable": all(
-            evaluation["target_motion_energy"] > 0.0
-            and 0.25
-            <= evaluation["prediction_motion_energy"] / evaluation["target_motion_energy"]
-            <= 4.0
+            _ratio_is_comparable(
+                evaluation["prediction_motion_energy"],
+                evaluation["target_motion_energy"],
+                factor=4.0,
+            )
             for evaluation in evaluations
         ),
     }
+
+
+def _mask_aligned_automated_checks(
+    evaluations: list[dict[str, Any]], *, exact_replay: bool
+) -> dict[str, bool]:
+    return {
+        "all_finite": all(evaluation["finite"] for evaluation in evaluations),
+        "all_states_bounded_below_two": all(
+            evaluation["maximum_state_magnitude"] < 2.0 for evaluation in evaluations
+        ),
+        "motion_nonzero": all(
+            evaluation["prediction_motion_energy"] > 1e-6 for evaluation in evaluations
+        ),
+        "short_horizon_accurate": all(
+            evaluation["short_16_step_mse"] < 1e-4 for evaluation in evaluations
+        ),
+        "long_horizon_accurate": all(
+            evaluation["trajectory_mse"] < 2e-2 for evaluation in evaluations
+        ),
+        "motion_rate_within_factor_four": all(
+            _ratio_is_comparable(
+                evaluation["prediction_motion_energy"],
+                evaluation["target_motion_energy"],
+                factor=4.0,
+            )
+            for evaluation in evaluations
+        ),
+        "total_variation_within_factor_two": all(
+            _ratio_is_comparable(
+                evaluation["prediction_total_variation"],
+                evaluation["target_total_variation"],
+                factor=2.0,
+            )
+            for evaluation in evaluations
+        ),
+        "spectral_centroid_within_factor_two": all(
+            _ratio_is_comparable(
+                evaluation["prediction_spatial_spectral_centroid"],
+                evaluation["target_spatial_spectral_centroid"],
+                factor=2.0,
+            )
+            for evaluation in evaluations
+        ),
+        "exact_replay": exact_replay,
+    }
+
+
+def _mask_aligned_smoke_checks(
+    evaluations: list[dict[str, Any]], *, exact_replay: bool
+) -> dict[str, bool]:
+    return {
+        "all_finite": all(evaluation["finite"] for evaluation in evaluations),
+        "all_states_bounded_below_two": all(
+            evaluation["maximum_state_magnitude"] < 2.0 for evaluation in evaluations
+        ),
+        "motion_nonzero": all(
+            evaluation["prediction_motion_energy"] > 1e-6 for evaluation in evaluations
+        ),
+        "exact_replay": exact_replay,
+    }
+
+
+def _evaluate(
+    model: NeuralCellularAutomaton,
+    budget: Stage1Budget,
+    teacher_config: ReactionDiffusionConfig,
+    device: torch.device,
+    output_dir: Path,
+) -> dict[str, Any]:
+    if budget.update_schedule == "mask_aligned_asynchronous":
+        return _evaluate_mask_aligned(model, budget, teacher_config, device, output_dir)
+
+    evaluations = []
+    artifact_rollout = None
+    for initialization, seed, mask_seed in zip(
+        ("central", "distributed"),
+        EVALUATION_SEEDS,
+        EVALUATION_MASK_SEEDS,
+        strict=True,
+    ):
+        rollout = _evaluate_initialization(
+            model,
+            initialization=initialization,
+            seed=seed,
+            mask_seed=mask_seed,
+            budget=budget,
+            teacher_config=teacher_config,
+            device=device,
+        )
+        evaluations.append(rollout.metrics)
+        if initialization == "distributed":
+            artifact_rollout = rollout
+    if artifact_rollout is None:
+        raise RuntimeError("Distributed evaluation artifact was not produced")
+    visuals = save_stage1_visuals(
+        output_dir,
+        target=artifact_rollout.target,
+        prediction=artifact_rollout.prediction,
+        initial_state=artifact_rollout.initial_state,
+        fire_masks=artifact_rollout.fire_masks,
+        frame_rate=15,
+    )
+    automated_checks = _standard_automated_checks(evaluations)
     return {
         "initializations": evaluations,
         "automated_checks": automated_checks,
@@ -493,6 +745,117 @@ def _evaluate(
     }
 
 
+def _evaluate_mask_aligned(
+    model: NeuralCellularAutomaton,
+    budget: Stage1Budget,
+    teacher_config: ReactionDiffusionConfig,
+    device: torch.device,
+    output_dir: Path,
+) -> dict[str, Any]:
+    recorded_evaluations = []
+    alternate_evaluations = []
+    replay_results = []
+    visuals: dict[str, dict[str, dict[str, str]]] = {
+        "recorded_mask": {},
+        "alternate_mask": {},
+    }
+    for initialization, state_seed, recorded_mask_seed, alternate_mask_seed in zip(
+        ("central", "distributed"),
+        EVALUATION_SEEDS,
+        EVALUATION_MASK_SEEDS,
+        ALTERNATE_MASK_SEEDS,
+        strict=True,
+    ):
+        recorded = _evaluate_initialization(
+            model,
+            initialization=initialization,
+            seed=state_seed,
+            mask_seed=recorded_mask_seed,
+            budget=budget,
+            teacher_config=teacher_config,
+            device=device,
+        )
+        replay = _evaluate_initialization(
+            model,
+            initialization=initialization,
+            seed=state_seed,
+            mask_seed=recorded_mask_seed,
+            budget=budget,
+            teacher_config=teacher_config,
+            device=device,
+        )
+        alternate = _evaluate_initialization(
+            model,
+            initialization=initialization,
+            seed=state_seed,
+            mask_seed=alternate_mask_seed,
+            budget=budget,
+            teacher_config=teacher_config,
+            device=device,
+        )
+        replay_exact = _rollouts_match_exactly(recorded, replay)
+        replay_results.append(
+            {
+                "initialization": initialization,
+                "state_seed": state_seed,
+                "mask_seed": recorded_mask_seed,
+                "exact": replay_exact,
+                "state_trajectory_hash": recorded.metrics["state_trajectory_hash"],
+            }
+        )
+        recorded_evaluations.append(recorded.metrics)
+        alternate_evaluations.append(alternate.metrics)
+        for condition, rollout in (
+            ("recorded_mask", recorded),
+            ("alternate_mask", alternate),
+        ):
+            artifact_dir = output_dir / f"{condition.replace('_', '-')}-{initialization}"
+            artifact_dir.mkdir()
+            visuals[condition][initialization] = save_stage1_visuals(
+                artifact_dir,
+                target=rollout.target,
+                prediction=rollout.prediction,
+                initial_state=rollout.initial_state,
+                fire_masks=rollout.fire_masks,
+                frame_rate=15,
+            )
+    exact_replay = all(result["exact"] for result in replay_results)
+    all_evaluations = [*recorded_evaluations, *alternate_evaluations]
+    if budget.name == "mask-aligned-smoke":
+        automated_checks = _mask_aligned_smoke_checks(
+            all_evaluations,
+            exact_replay=exact_replay,
+        )
+    else:
+        automated_checks = _mask_aligned_automated_checks(
+            all_evaluations,
+            exact_replay=exact_replay,
+        )
+    return {
+        "initializations": recorded_evaluations,
+        "alternate_mask_initializations": alternate_evaluations,
+        "exact_replay": {
+            "passed": exact_replay,
+            "initializations": replay_results,
+        },
+        "automated_checks": automated_checks,
+        "automated_checks_passed": all(automated_checks.values()),
+        "visuals": visuals,
+        "visual_initializations": ["central", "distributed"],
+        "visual_layout": "comparison columns are target, prediction, absolute difference",
+    }
+
+
+def _rollouts_match_exactly(first: EvaluationRollout, second: EvaluationRollout) -> bool:
+    return (
+        first.metrics["initial_state_hash"] == second.metrics["initial_state_hash"]
+        and first.metrics["fire_mask_hash"] == second.metrics["fire_mask_hash"]
+        and first.metrics["state_trajectory_hash"] == second.metrics["state_trajectory_hash"]
+        and torch.equal(first.target, second.target)
+        and torch.equal(first.prediction, second.prediction)
+    )
+
+
 def run_stage1(output_dir: Path, budget: Stage1Budget) -> dict[str, Any]:
     device = _require_mps_without_fallback()
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -501,13 +864,13 @@ def run_stage1(output_dir: Path, budget: Stage1Budget) -> dict[str, Any]:
         REACTION_DIFFUSION_CONFIG,
         time_step=budget.teacher_time_step,
     )
-    trajectories = _build_training_trajectories(budget, teacher_config)
+    training_data = _build_training_trajectories(budget, teacher_config)
     model = _make_model(device).train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=budget.learning_rate)
     training_log, training_seconds = _train(
         model,
         optimizer,
-        trajectories,
+        training_data,
         budget,
         teacher_config,
         device,
@@ -518,9 +881,15 @@ def run_stage1(output_dir: Path, budget: Stage1Budget) -> dict[str, Any]:
         "training_central": TRAINING_DATA_SEEDS[0],
         "training_distributed": TRAINING_DATA_SEEDS[1],
         "selection": SELECTION_SEED,
-        "mask": MASK_SEED,
+        "mismatched_mask": MASK_SEED,
+        "training_mask_central": TRAINING_MASK_SEEDS[0],
+        "training_mask_distributed": TRAINING_MASK_SEEDS[1],
         "evaluation_central": EVALUATION_SEEDS[0],
         "evaluation_distributed": EVALUATION_SEEDS[1],
+        "evaluation_mask_central": EVALUATION_MASK_SEEDS[0],
+        "evaluation_mask_distributed": EVALUATION_MASK_SEEDS[1],
+        "alternate_mask_central": ALTERNATE_MASK_SEEDS[0],
+        "alternate_mask_distributed": ALTERNATE_MASK_SEEDS[1],
     }
     save_stage1_checkpoint(
         checkpoint_path,
@@ -593,12 +962,26 @@ def _print_summary(result: dict[str, Any]) -> None:
             f"max_state={evaluation['maximum_state_magnitude']:.3f}"
         )
     print(f"Automated checks passed: {result['evaluation']['automated_checks_passed']}")
-    print(f"Visual comparison: {result['evaluation']['visuals']['comparison_gif']}")
+    visuals = result["evaluation"]["visuals"]
+    if result["budget"]["update_schedule"] == "mask_aligned_asynchronous":
+        print(f"Visual comparison: {visuals['recorded_mask']['distributed']['comparison_gif']}")
+    else:
+        print(f"Visual comparison: {visuals['comparison_gif']}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("budget", choices=("smoke", "rapid", "asynchronous", "stress"))
+    parser.add_argument(
+        "budget",
+        choices=(
+            "smoke",
+            "rapid",
+            "asynchronous",
+            "stress",
+            "mask-aligned-smoke",
+            "mask-aligned-rapid",
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     budgets = {
@@ -606,6 +989,8 @@ def main() -> None:
         "rapid": RAPID_BUDGET,
         "asynchronous": ASYNCHRONOUS_BUDGET,
         "stress": STRESS_BUDGET,
+        "mask-aligned-smoke": MASK_ALIGNED_SMOKE_BUDGET,
+        "mask-aligned-rapid": MASK_ALIGNED_RAPID_BUDGET,
     }
     result = run_stage1(args.output_dir, budgets[args.budget])
     _print_summary(result)

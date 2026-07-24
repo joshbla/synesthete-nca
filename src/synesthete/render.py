@@ -15,12 +15,18 @@ def save_stage1_visuals(
     *,
     target: Tensor,
     prediction: Tensor,
+    initial_state: Tensor,
+    fire_masks: Tensor,
     frame_rate: int,
 ) -> dict[str, str]:
     if target.shape != prediction.shape or target.ndim != 3:
         raise ValueError("Target and prediction must share (frame, height, width) shape")
     if frame_rate <= 0:
         raise ValueError("frame_rate must be positive")
+    if initial_state.ndim != 3 or initial_state.shape[-2:] != target.shape[-2:]:
+        raise ValueError("Initial state must have (channel, height, width) shape")
+    if fire_masks.ndim != 4 or fire_masks.shape[1:] != (1, *target.shape[-2:]):
+        raise ValueError("Fire masks must have (step, 1, height, width) shape")
 
     target_array = target.detach().cpu().numpy().astype(np.float32)
     prediction_array = prediction.detach().cpu().numpy().astype(np.float32)
@@ -32,6 +38,8 @@ def save_stage1_visuals(
         target=target_array,
         prediction=prediction_array,
         absolute_difference=difference_array,
+        initial_state=initial_state.detach().cpu().numpy().astype(np.float32),
+        fire_masks=fire_masks.detach().cpu().numpy().astype(np.float32),
     )
 
     target_images = _images(target_array)
