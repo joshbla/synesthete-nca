@@ -283,6 +283,75 @@ premature to train learned conditioning.
 No training. A complete probe should render in less than 10 minutes and ideally
 near real time.
 
+### Result
+
+Stage 2 is partial and in progress. The hand-controlled audio steering layer
+freezes the retained Stage 1 `c31be68` rule and strictly loads its checkpoint
+with fp32, MPS, and no fallback. It uses the recorded 0.5 fire masks, the
+distributed initialization with state seed 4107 and mask seed 4206, fixes the Stage 1 render
+mapping, and renders 24 fps synchronized H.264/AAC MP4 with the original WAV
+attached. Probes and counterfactuals are implemented exactly: silence, constant,
+isolated impulse, alternating energy, stepped bands, and a combined review
+under correct, exact replay, silent, shuffled, and frozen mean conditions,
+from the same state and masks with blind files carrying identical attached
+audio.
+
+Controls are deterministic and non-learned. Audio features are absolute RMS,
+onset, spectral flux, low (80-300 Hz), and high (2500-6000 Hz) bands. RMS
+scales update speed over 0.35-1.5 against fixed step recurrence; onset injects
+a bounded channel-1 perturbation; band energy uses a broad low-band perturbation
+and compact signed high-band wavelets; the current sustained variant keeps
+spectral pressure at amplitude 0.008 per frame. There is no training, no
+architecture change, and no pixel or audio postprocessing.
+
+The safe candidate `outputs/stage2-smoke-candidate` passes all automated checks
+except spectral spatial after metric correction. Measured: high/low energy
+motion ratio 2.4009; impulse structural response ratio 2.2501; visible lag 4
+updates / 1 frame / 41.67 ms; correct max state 0.7440; shuffled max 1.1318;
+exact replay true; mean luminance contribution about 7%; correct-vs-silent
+structural divergence about 0.389 and correct-vs-shuffled about 0.110. Human
+blind review chose B, with the concealed mapping B=correct, and described the
+response as mostly volume driven, movement accelerating with volume,
+irrespective of high or low tones.
+
+A stronger-amplitude variant `outputs/stage2-smoke-candidate-2` raised
+amplitude to 0.18, pushing shuffled max to 2.0424 without improving spectral
+separation; it is rejected and retained as a decision-relevant failure. A
+transition-wavelet variant `outputs/stage2-smoke-spectral-wavelets` was bounded
+and exact with B=correct again, but human review found everything seemed about
+the same and could not tell what changed; its spectral spatial average failed
+at roughly 0.77% centroid separation, so it is rejected as a spectral solution.
+The current sustained spectral variant
+`outputs/stage2-smoke-spectral-sustain` is bounded (correct max 0.7414,
+shuffled 0.8509), exact replay passes, and all non-spectral checks pass, but
+spectral spatial separation still fails at roughly 0.88% centroid separation.
+Human review said it seemed roughly the same, would require close attention,
+and could not reliably determine the distinction.
+
+The deployment checkpoint artifact `outputs/stage2-partial-deploy` reruns the
+current sustained control after evidence-integrity fixes. Exact replay, bounds,
+blind audio identity, onset, energy, lag, recovery, divergence, and
+non-brightness checks pass. High/low energy motion ratio is 2.4059, impulse
+response ratio is 2.2501, visible lag is 4 updates / 1 frame / 41.67 ms,
+correct/shuffled maximum state magnitude is 0.7414/0.8510, and mean-luminance
+contribution is 6.5%. Spectral spatial separation remains below the fixed gate
+at 0.95% centroid difference. No additional human review was requested for this
+packaging-only rerun.
+
+The human timing gate identified the correct blind condition as B twice, which
+is better than chance for these reviews. Two same-order trials are not strong
+statistical evidence: the blind permutation happened to be the same because the
+evaluation seed is deterministic.
+
+Interpretation: audio extraction, synchronization, playback, rendering, and
+counterfactual plumbing, RMS motion control, the silence distinction, prompt
+onset response, safety, exact replay, and a non-brightness response are
+established. Spectral spatial control is not perceptually established. The
+Stage 2 gate therefore fails overall, and learned conditioning (Stage 3) must
+not begin. Next work should improve spectral control or reconsider that
+control surface, use a new blind permutation and order, and repeat human
+review later.
+
 ## Stage 3: Learn Audio-Conditioned Dynamics With a Forced Teacher
 
 ### Question

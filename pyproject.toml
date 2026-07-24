@@ -19,6 +19,7 @@ dependencies = [
 synesthete-check = "synesthete.runtime:main"
 synesthete-benchmark = "synesthete.benchmark:main"
 synesthete-stage1 = "synesthete.stage1:main"
+synesthete-stage2 = "synesthete.stage2:main"
 
 [dependency-groups]
 dev = [

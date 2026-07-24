@@ -16,7 +16,7 @@ architecture is expected to accomplish, and how success will be falsified.
 
 ## Status
 
-**Stage 1 passes for deterministic and mask-aligned asynchronous learned dynamics.**
+**Stage 1 passes for deterministic and mask-aligned asynchronous learned dynamics. Stage 2 is partial and in progress.**
 
 The current work establishes:
 
@@ -38,6 +38,19 @@ remained stable under unseen mask seeds. This establishes learned local dynamics
 under aligned stochastic timing; it does not yet establish autonomous material
 behavior or audio conditioning.
 
+Stage 2 has built the hand-controlled audio steering layer on top of the frozen
+`c31be68` rule. It establishes audio extraction, synchronization, playback,
+rendering, and counterfactual plumbing, RMS-driven motion control, a legible
+silence distinction, prompt onset response, safety bounds, exact replay, and a
+response that is not reducible to global brightness. It has not yet established
+perceptible spectral spatial control: repeated candidates (a safe baseline, a
+stronger-amplitude variant, transition wavelets, and a sustained spectral
+variant) all failed the spectral spatial separation check, and human blind review
+could not reliably distinguish the correct condition on spectral grounds. The
+Stage 2 gate therefore fails overall, and learned conditioning (Stage 3) must
+not begin. Next work should improve or reconsider the spectral control surface,
+use a fresh blind permutation and order, and repeat human review.
+
 ## Setup
 
 The project uses Python 3.13 and `uv`:
@@ -51,6 +64,7 @@ uv run ruff format --check .
 uv run synesthete-benchmark smoke --output-dir outputs/stage0-smoke
 uv run synesthete-stage1 smoke --output-dir outputs/stage1-smoke
 uv run synesthete-stage1 mask-aligned-smoke --output-dir outputs/stage1-mask-aligned-smoke
+uv run synesthete-stage2 smoke --checkpoint outputs/stage1-mask-aligned-rapid-c31be68/checkpoint.pt --output-dir OUTPUT
 ```
 
 The runtime check reports the Python and PyTorch versions, fails when the local
