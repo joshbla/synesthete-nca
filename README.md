@@ -193,6 +193,9 @@ when a measured bottleneck explains why more compute should improve it.
   update rule, audio injection, stability controls, and deferred alternatives.
 - [Experiment Plan](docs/experiment-plan.md): ordered experiments, required
   artifacts, counterfactual evaluation, and stop/go gates.
+- [Stage 3 Plan](docs/stage3-plan.md): the minimum viable learned
+  audio-conditioning experiment, built on a single RMS forced teacher;
+  spectral steering is explicitly de-scoped.
 - [Research Basis](docs/research-basis.md): what the relevant NCA research
   proves, what it does not prove, and how it informs this design.
 

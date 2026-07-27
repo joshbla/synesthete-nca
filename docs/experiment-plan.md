@@ -366,25 +366,41 @@ interpretation.
 
 ## Stage 3: Learn Audio-Conditioned Dynamics With a Forced Teacher
 
+Detailed implementation contract: see `stage3-plan.md`.
+
 ### Question
 
-Can the NCA learn to use time-aligned audio features when the correct visual
-effect is known and audibly falsifiable?
+Can the NCA learn to use time-aligned audio when the correct visual effect is
+known and visually falsifiable?
+
+### Scope decision
+
+Stage 3 targets one reliable learned audio steering relationship. The
+minimal first control is RMS/loudness, because Stage 2 already proved it has
+a visible, bounded, non-brightness hand-controlled surface on the retained
+Stage 1 rule. Onset is an optional follow-up. Spectral/band steering is
+deferred: Stage 2 tried three spectral variants and stronger perturbation
+threatened bounds without perceptible separation, so it is not a blocker and
+receives no work before a learned RMS-conditioned result exists.
 
 ### Method
 
-Create a forced synthetic dynamical system in which audio features control
-documented physical parameters. Examples:
+Build a forced teacher by extending the retained Stage 1 oscillatory
+reaction-diffusion rule so RMS scales its time step over a safe range, directly
+matching the update-speed direction Stage 2 already validated. Generate paired
+`(audio, teacher trajectory)` clips from the same initial states and recorded
+fire masks used in Stage 1. Train the audio-conditioned NCA to imitate them from
+matched starting states.
 
-- RMS changes reaction rate or damping;
-- onset pulses inject localized activation;
-- broad bands alter diffusion anisotropy or competing reaction terms.
+Architecture delta is minimal and follows `technical-direction.md`:
+feature-wise modulation of the update network's hidden layer. A small
+conditioning MLP maps scalar RMS to `(gamma, beta)` of width `hidden_channels`,
+broadcast across spatial positions, zero-initialized and applied after loading
+the retained Stage 1 weights so that rule is recovered when audio is zero. No
+hypernetwork, no direct state-channel multiplication, no genome.
 
-Generate paired audio and teacher trajectories. Train the audio-conditioned NCA
-to imitate them from matched starting states.
-
-The primary objective can include trajectory reconstruction, but it must also
-include correct-versus-shuffled pressure. A candidate form is:
+The primary objective includes trajectory reconstruction plus
+correct-versus-shuffled pressure. A candidate form is:
 
 ```text
 L_good = trajectory_loss(model(state, correct_audio), target)
@@ -393,38 +409,54 @@ L_bad  = trajectory_loss(model(state, shuffled_audio), target)
 L_contrast = relu(L_good + margin - L_bad)
 ```
 
-This repeats the proven lesson from the original project at the trajectory
-level, where audio affects recurrence rather than one denoised frame.
+`L_contrast` is evaluated against both full silence and time-shuffled audio
+and is the key anti-audio-ignoring pressure. It is the trajectory-level
+analogue of the Stage 2 counterfactual, repeating the proven lesson that
+audio must affect recurrence rather than one denoised frame.
 
 ### Gate
 
-- Correct audio predicts the teacher trajectory better than silent,
-  time-shuffled, and batch-shuffled audio.
-- The difference is visible from an identical state.
-- At least two distinct audio features produce distinguishable structural or
-  motion responses.
-- The model does not reduce the task to mean brightness.
-- Long rollout remains stable.
+- Correct audio predicts the teacher trajectory better than both full silence
+  and time-shuffled audio, from the identical state and recorded masks.
+- The difference is visible from an identical state, not only numerical.
+- The model does not reduce the task to mean brightness; the difference
+  survives mean-luminance removal.
+- Long rollout remains finite and bounded (no NaN/Inf, maximum state
+  magnitude below 2.0 beyond the training horizon).
+- The complete state trajectory replays exactly from the same initial
+  state, fire-mask seed, and audio.
+
+One reliable audio steering relationship (RMS) is sufficient to pass Stage 3.
+Requiring two or more distinct audio features is explicitly removed from
+this gate; spectral and onset steering are optional follow-ups only after
+this RMS-conditioned slice passes.
 
 ### Failure interpretation
 
-- If ordinary trajectory loss works but counterfactuals do not, the model again
-  ignores audio and the incentive is insufficient.
-- If RMS works but bands do not, feature injection or teacher identifiability is
-  too weak.
-- If correct and shuffled losses separate while videos do not, the metric is
-  detecting an imperceptible shortcut.
+- If ordinary trajectory loss works but counterfactuals do not, the model
+  again ignores audio and the incentive is insufficient.
+- If the contrast loss separates but videos do not, the metric is detecting
+  an imperceptible shortcut; increase the margin or inspect which state
+  channels carry the difference.
+- If bounds are violated, the conditioning scale or teacher range is unsafe;
+  reduce it and remeasure before changing the research design.
+- If RMS conditioning never separates from silence, the forced teacher is
+  not making RMS materially alter the trajectory; redesign the teacher rather
+  than adding more audio features.
 
 ### Maximum wall-clock
 
-- Rapid loss comparison: 10 minutes.
+- Smoke: 1-3 minutes.
+- Rapid loss comparison: no more than 10 minutes.
 - One full learned-conditioning run: 1-2 hours.
+- No hyperparameter sweeps.
 
 ### Meaning of success
 
-Passing this stage proves learned causal control in a constrained system. It
-does not yet prove novel visual synthesis because the visual dynamics have a
-teacher.
+Passing this stage proves learned causal control in a constrained system with
+one audio feature. It does not yet prove novel visual synthesis because the
+visual dynamics have a teacher, and it does not prove spectral or multi-feature
+control.
 
 ## Stage 4: Autonomous Material Under Constraints
 
@@ -543,8 +575,11 @@ the same global feature distribution.
 
 ## Counterfactual Evaluation Matrix
 
-Every learned audio-conditioned checkpoint is evaluated from the same state and
-random mask sequence under:
+This matrix is a toolbox for learned audio-conditioned checkpoints. Each stage
+defines the subset required for its claim. Stage 3 requires correct audio,
+exact repeat, full silence, and time-shuffled audio; the remaining conditions
+become useful when additional features or broader claims are introduced. Every
+comparison uses the same state and random mask sequence.
 
 | Condition | Purpose |
 |---|---|
